@@ -7,27 +7,19 @@ import Resource from "../Core/Resource.js";
 import ForEach from "../ThirdParty/GltfPipeline/ForEach.js";
 import ResourceCache from "./ResourceCache.js";
 import MetadataGltfExtension from "./MetadataGltfExtension.js";
-import ModelRuntime from "./ModelRuntime.js";
+import ModelComponents from "./ModelComponents.js";
 
-var VertexAttribute = ModelRuntime.VertexAttribute;
-var Indices = ModelRuntime.Indices;
-var FeatureIdAttribute = ModelRuntime.FeatureIdAttribute;
-var FeatureIdTexture = ModelRuntime.FeatureIdTexture;
-var MorphTarget = ModelRuntime.MorphTarget;
-var Primitive = ModelRuntime.Primitive;
-var Mesh = ModelRuntime.Mesh;
-var Instances = ModelRuntime.Instances;
-var Node = ModelRuntime.Node;
-var Texture = ModelRuntime.Texture;
-var Material = ModelRuntime.Material;
-
-var GltfLoaderState = {
-  UNLOADED: 0,
-  LOADING: 1,
-  PROCESSING: 2,
-  READY: 3,
-  FAILED: 4,
-};
+var VertexAttribute = ModelComponents.VertexAttribute;
+var Indices = ModelComponents.Indices;
+var FeatureIdAttribute = ModelComponents.FeatureIdAttribute;
+var FeatureIdTexture = ModelComponents.FeatureIdTexture;
+var MorphTarget = ModelComponents.MorphTarget;
+var Primitive = ModelComponents.Primitive;
+var Mesh = ModelComponents.Mesh;
+var Instances = ModelComponents.Instances;
+var Node = ModelComponents.Node;
+var Texture = ModelComponents.Texture;
+var Material = ModelComponents.Material;
 
 var defaultAccept =
   "model/gltf-binary,model/gltf+json;q=0.8,application/json;q=0.2,*/*;q=0.01";
@@ -75,61 +67,9 @@ export default function GltfLoader(options) {
   this._keepResident = keepResident;
   this._asynchronous = asynchronous;
   this._gltfCacheResource = undefined;
-  this._modelRuntime = undefined;
-  this._error = undefined;
-  this._state = GltfLoaderState.UNLOADED;
 }
 
-Object.defineProperties(GltfLoader.prototype, {
-  /**
-   * Whether the loader is ready.
-   *
-   * @memberof GltfLoader.prototype
-   * @type {Boolean}
-   * @readonly
-   */
-  ready: {
-    get: function () {
-      return this._state === GltfLoaderState.READY;
-    },
-  },
-  /**
-   * The error message if the glTF failed to load.
-   *
-   * @memberof GltfLoader.prototype
-   * @type {Error}
-   * @readonly
-   */
-  error: {
-    get: function () {
-      return this._error;
-    },
-  },
-});
-
-/**
- * TODO: doc
- */
-GltfLoader.prototype.update = function (model, frameState) {
-  if (!FeatureDetection.supportsWebP.initialized) {
-    FeatureDetection.supportsWebP.initialize();
-    return;
-  }
-
-  if (this._state === GltfLoaderState.UNLOADED) {
-    load(this, model, frameState);
-    this._state = GltfLoaderState.LOADING;
-  }
-
-  if (this._state === GltfLoaderState.PROCESSING) {
-    var ready = update(this, frameState);
-    if (ready) {
-      this._state = GltfLoaderState.READY;
-    }
-  }
-};
-
-function load(loader, model, frameState) {
+GltfLoader.prototype.load = function (model, frameState) {
   var supportedImageFormats = {
     webp: FeatureDetection.supportsWebP(),
     s3tc: frameState.context.s3tc,
@@ -138,33 +78,26 @@ function load(loader, model, frameState) {
   };
 
   var gltfCacheResource = ResourceCache.loadGltf({
-    gltfResource: loader._gltfResource,
-    baseResource: loader._baseResource,
-    keepResident: loader._keepResident,
+    gltfResource: this._gltfResource,
+    baseResource: this._baseResource,
+    keepResident: this._keepResident,
   });
 
-  loader._gltfCacheResource = gltfCacheResource;
+  this._gltfCacheResource = gltfCacheResource;
 
-  gltfCacheResource.promise
-    .then(function () {
-      if (model.isDestroyed()) {
-        unload(loader);
-        loader._state = GltfLoaderState.UNLOADED;
-        return;
-      }
+  var that = this;
+  gltfCacheResource.promise.then(function () {
+    if (that.isDestroyed()) {
+      unload(that);
+      // The loader was destroyed before the promise resolved
+      return;
+    }
 
-      var gltf = gltfCacheResource.gltf;
-      var modelRuntime = parse(loader, gltf, supportedImageFormats);
-
-      loader._state = GltfLoaderState.PROCESSING;
-      loader._modelRuntime = modelRuntime;
-    })
-    .otherwise(function (error) {
-      unload(loader);
-      loader._state = GltfLoaderState.FAILED;
-      loader._error = error;
-    });
-}
+    var gltf = gltfCacheResource.gltf;
+    unload(that);
+    parse(that, model, gltf, supportedImageFormats);
+  });
+};
 
 function loadVertexBuffer(loader, gltf, accessorId, semantic, draco) {
   var accessor = gltf.accessors[accessorId];
@@ -271,6 +204,7 @@ function loadTexture(loader, gltf, textureInfo, supportedImageFormats) {
 
   var texture = new Texture();
   texture.cacheResource = textureCacheResource;
+  texture.texCoord = textureInfo.texCoord;
 
   return texture;
 }
@@ -290,7 +224,7 @@ function loadMaterial(loader, gltf, gltfMaterial, supportedImageFormats) {
       );
     }
     if (defined(pbrMetallicRoughness.metallicRoughnessTexture)) {
-      material.baseColorTexture = loadTexture(
+      material.metallicRoughnessTexture = loadTexture(
         loader,
         gltf,
         pbrMetallicRoughness.metallicRoughnessTexture,
@@ -582,9 +516,73 @@ function getSceneNodeIds(gltf) {
   return nodes;
 }
 
-function parse(loader, gltf, supportedImageFormats) {
-  var model = new ModelRuntime();
+function loadFeatureMetadataBufferViews(loader, gltf, featureMetadata) {
+  var bufferViewIds = {};
 
+  var featureTables = featureMetadata.featureTables;
+  if (defined(featureTables)) {
+    for (var featureTableId in featureTables) {
+      if (featureTables.hasOwnProperty(featureTableId)) {
+        var featureTable = featureTables[featureTableId];
+        var properties = featureTable.properties;
+        if (defined(properties)) {
+          for (var propertyId in properties) {
+            if (properties.hasOwnProperty(propertyId)) {
+              var property = properties[propertyId];
+              var bufferView = property.bufferView;
+              var arrayOffsetBufferView = property.arrayOffsetBufferView;
+              var stringOffsetBufferView = property.stringOffsetBufferView;
+              if (defined(bufferView)) {
+                bufferViewIds[bufferView] = true;
+              }
+              if (defined(arrayOffsetBufferView)) {
+                bufferViewIds[arrayOffsetBufferView] = true;
+              }
+              if (defined(stringOffsetBufferView)) {
+                bufferViewIds[stringOffsetBufferView] = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  var bufferViewCacheResources = {};
+
+  var bufferViewPromises = [];
+  for (var bufferViewId in bufferViewIds) {
+    if (bufferViewIds.hasOwnProperty(bufferViewId)) {
+      var bufferViewCacheResource = ResourceCache.loadBufferView({
+        gltf: gltf,
+        bufferViewId: bufferViewId,
+        gltfResource: loader._gltfResource,
+        baseResource: loader._baseResource,
+        keepResident: false,
+      });
+      bufferViewCacheResources[bufferViewId] = bufferViewCacheResource;
+      bufferViewPromises.push(bufferViewCacheResource.promise);
+    }
+  }
+
+  var that = this;
+
+  return when.all(bufferViewPromises).then(function () {
+    var bufferViews = {};
+    var bufferViewCacheResources = that._bufferViewCacheResources;
+    for (var bufferViewId in bufferViewCacheResources) {
+      if (bufferViewCacheResources.hasOwnProperty(bufferViewId)) {
+        var bufferViewCacheResource = bufferViewCacheResources[bufferViewId];
+        var typedArray = bufferViewCacheResource.typedArray;
+        bufferViews[bufferViewId] = typedArray;
+      }
+    }
+    return bufferViews;
+  });
+}
+
+
+function parse(loader, model, gltf, supportedImageFormats) {
   var nodeIds = getSceneNodeIds(gltf);
 
   model.nodes = loadNodes(loader, gltf, nodeIds, supportedImageFormats);
@@ -605,142 +603,40 @@ function parse(loader, gltf, supportedImageFormats) {
   return model;
 }
 
-function updateVertexAttribute(attribute) {
-  attribute.cacheResource.update();
-  attribute.vertexBuffer = attribute.cacheResource.vertexBuffer;
-  return defined(attribute.vertexBuffer);
-}
-
-function updateIndices(indices) {
-  indices.cacheResource.update();
-  indices.indexBuffer = indices.cacheResource.indexBuffer;
-  return defined(indices.indexBuffer);
-}
-
-function updateTexture(texture) {
-  texture.cacheResource.update();
-  texture.texture = texture.cacheResource.texture;
-  return defined(texture.texture);
-}
-
-function updateFeatureMetadata(featureMetadata) {
-  // TODO: eventually there will be feature textures that need to be updated
-  return defined(featureMetadata.featureTables);
-}
-
-function updateNode(loader, node, frameState) {
-  var i;
-  var j;
-  var k;
-
-  var ready = true;
-
-  var mesh = node.mesh;
-  if (defined(mesh)) {
-    var primitives = mesh.primitives;
-    var primitivesLength = primitives.length;
-    for (i = 0; i < primitivesLength; ++i) {
-      var primitive = primitives[i];
-      var vertexAttributes = primitive.vertexAttributes;
-      var vertexAttributesLength = vertexAttributes.length;
-      for (j = 0; j < vertexAttributesLength; ++j) {
-        var vertexAttribute = vertexAttributes[j];
-        ready = updateVertexAttribute(vertexAttribute) && ready;
-      }
-      var morphTargets = primitive.morphTargets;
-      var morphTargetsLength = morphTargets.length;
-      for (j = 0; j < morphTargetsLength; ++j) {
-        var morphTarget = morphTargets[j];
-        var morphVertexAttributes = morphTarget.vertexAttributes;
-        var morphVertexAttributesLength = morphVertexAttributes.length;
-        for (k = 0; k < morphVertexAttributesLength; ++k) {
-          var morphVertexAttribute = morphVertexAttributes[k];
-          ready = updateVertexAttribute(morphVertexAttribute) && ready;
-        }
-      }
-      var indices = primitive.indices;
-      if (defined(indices)) {
-        ready = updateIndices(indices) && ready;
-      }
-      var material = primitive.material;
-      if (defined(material)) {
-        if (defined(material.baseColorTexture)) {
-          ready = updateTexture(material.baseColorTexture) && ready;
-        }
-        if (defined(material.metallicRoughnessTexture)) {
-          ready = updateTexture(material.metallicRoughnessTexture) && ready;
-        }
-        if (defined(material.diffuseTexture)) {
-          ready = updateTexture(material.diffuseTexture) && ready;
-        }
-        if (defined(material.specularGlossinessTexture)) {
-          ready = updateTexture(material.specularGlossinessTexture) && ready;
-        }
-        if (defined(material.emissiveTexture)) {
-          ready = updateTexture(material.emissiveTexture) && ready;
-        }
-        if (defined(material.normalTexture)) {
-          ready = updateTexture(material.normalTexture) && ready;
-        }
-        if (defined(material.occlusionTexture)) {
-          ready = updateTexture(material.occlusionTexture) && ready;
-        }
-      }
-    }
-  }
-
-  var instances = node.instances;
-  if (defined(instances)) {
-    var instanceAttributes = instances.instanceAttributes;
-    var instanceAttributesLength = instanceAttributes.length;
-    for (i = 0; i < instanceAttributesLength; ++i) {
-      var instanceAttribute = instanceAttributes[i];
-      ready = updateVertexAttribute(instanceAttribute) && ready;
-    }
-  }
-
-  // Recurse over children
-  var childrenLength = node.children.length;
-  for (i = 0; i < childrenLength; ++i) {
-    var child = node.children[i];
-    ready = updateNode(loader, child, frameState) && ready;
-  }
-
-  return ready;
-}
-
-function update(loader, frameState) {
-  var ready = true;
-  var model = loader._modelRuntime;
-  var nodes = model.nodes;
-  var nodesLength = nodes.length;
-  for (var i = 0; i < nodesLength; ++i) {
-    ready = updateNode(loader, nodes[i], frameState) && ready;
-  }
-
-  var featureMetadata = model.featureMetadata;
-  if (defined(featureMetadata)) {
-    ready = updateFeatureMetadata(featureMetadata) && ready;
-  }
-
-  return ready;
-}
-
 function unload(loader) {
   if (defined(loader._gltfCacheResource)) {
     ResourceCache.unload(loader._gltfCacheResource);
   }
+  loader._gltfCacheResource = undefined;
 }
 
 /**
- * TODO: doc
+ * Returns true if this object was destroyed; otherwise, false.
+ * <br /><br />
+ * If this object was destroyed, it should not be used; calling any function other than
+ * <code>isDestroyed</code> will result in a {@link DeveloperError} exception.
+ *
+ * @returns {Boolean} <code>true</code> if this object was destroyed; otherwise, <code>false</code>.
+ *
+ * @see GltfLoader#destroy
  */
 GltfLoader.prototype.isDestroyed = function () {
   return false;
 };
 
 /**
- * TODO: doc
+ * Unloads resources from the cache.
+ * <br /><br />
+ * Once an object is destroyed, it should not be used; calling any function other than
+ * <code>isDestroyed</code> will result in a {@link DeveloperError} exception.  Therefore,
+ * assign the return value (<code>undefined</code>) to the object as done in the example.
+ *
+ * @exception {DeveloperError} This object was destroyed, i.e., destroy() was called.
+ *
+ * @example
+ * handler = handler && handler.destroy();
+ *
+ * @see GltfLoader#isDestroyed
  */
 GltfLoader.prototype.destroy = function () {
   unload(this);

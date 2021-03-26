@@ -5,106 +5,128 @@
  *
  * @private
  */
-function ModelRuntime() {
-  this.nodes = [];
-  this.featureMetadata = undefined;
+
+function updateVertexAttribute(attribute) {
+  attribute.cacheResource.update();
+  attribute.vertexBuffer = attribute.cacheResource.vertexBuffer;
+  return defined(attribute.vertexBuffer);
 }
 
-function VertexAttribute() {
-  this.semantic = undefined;
-  this.constantValue = undefined;
-  this.byteOffset = undefined;
-  this.byteStride = undefined;
-  this.componentType = undefined;
-  this.normalized = undefined;
-  this.count = undefined;
-  this.type = undefined;
-  this.vertexBuffer = undefined;
-  this.cacheResource = undefined;
+function updateIndices(indices) {
+  indices.cacheResource.update();
+  indices.indexBuffer = indices.cacheResource.indexBuffer;
+  return defined(indices.indexBuffer);
 }
 
-function Indices() {
-  this.constantValue = 0;
-  this.indexDatatype = undefined;
-  this.count = undefined;
-  this.indexBuffer = undefined;
-  this.cacheResource = undefined;
+function updateTexture(texture) {
+  texture.cacheResource.update();
+  texture.texture = texture.cacheResource.texture;
+  return defined(texture.texture);
 }
 
-function FeatureIdAttribute() {
-  this.featureTable = undefined;
-  this.attribute = undefined;
-  this.constant = undefined;
-  this.divisor = undefined;
+function updateFeatureMetadata(featureMetadata) {
+  // TODO: eventually there will be feature textures that need to be updated
+  return defined(featureMetadata.featureTables);
 }
 
-function FeatureIdTexture() {
-  this.featureTable = undefined;
-  this.channels = undefined;
-  this.texture = undefined;
+function updateNode(loader, node, frameState) {
+  var i;
+  var j;
+  var k;
+
+  var ready = true;
+
+  var mesh = node.mesh;
+  if (defined(mesh)) {
+    var primitives = mesh.primitives;
+    var primitivesLength = primitives.length;
+    for (i = 0; i < primitivesLength; ++i) {
+      var primitive = primitives[i];
+      var vertexAttributes = primitive.vertexAttributes;
+      var vertexAttributesLength = vertexAttributes.length;
+      for (j = 0; j < vertexAttributesLength; ++j) {
+        var vertexAttribute = vertexAttributes[j];
+        ready = updateVertexAttribute(vertexAttribute) && ready;
+      }
+      var morphTargets = primitive.morphTargets;
+      var morphTargetsLength = morphTargets.length;
+      for (j = 0; j < morphTargetsLength; ++j) {
+        var morphTarget = morphTargets[j];
+        var morphVertexAttributes = morphTarget.vertexAttributes;
+        var morphVertexAttributesLength = morphVertexAttributes.length;
+        for (k = 0; k < morphVertexAttributesLength; ++k) {
+          var morphVertexAttribute = morphVertexAttributes[k];
+          ready = updateVertexAttribute(morphVertexAttribute) && ready;
+        }
+      }
+      var indices = primitive.indices;
+      if (defined(indices)) {
+        ready = updateIndices(indices) && ready;
+      }
+      var material = primitive.material;
+      if (defined(material)) {
+        if (defined(material.baseColorTexture)) {
+          ready = updateTexture(material.baseColorTexture) && ready;
+        }
+        if (defined(material.metallicRoughnessTexture)) {
+          ready = updateTexture(material.metallicRoughnessTexture) && ready;
+        }
+        if (defined(material.diffuseTexture)) {
+          ready = updateTexture(material.diffuseTexture) && ready;
+        }
+        if (defined(material.specularGlossinessTexture)) {
+          ready = updateTexture(material.specularGlossinessTexture) && ready;
+        }
+        if (defined(material.emissiveTexture)) {
+          ready = updateTexture(material.emissiveTexture) && ready;
+        }
+        if (defined(material.normalTexture)) {
+          ready = updateTexture(material.normalTexture) && ready;
+        }
+        if (defined(material.occlusionTexture)) {
+          ready = updateTexture(material.occlusionTexture) && ready;
+        }
+      }
+    }
+  }
+
+  var instances = node.instances;
+  if (defined(instances)) {
+    var instanceAttributes = instances.instanceAttributes;
+    var instanceAttributesLength = instanceAttributes.length;
+    for (i = 0; i < instanceAttributesLength; ++i) {
+      var instanceAttribute = instanceAttributes[i];
+      ready = updateVertexAttribute(instanceAttribute) && ready;
+    }
+  }
+
+  // Recurse over children
+  var childrenLength = node.children.length;
+  for (i = 0; i < childrenLength; ++i) {
+    var child = node.children[i];
+    ready = updateNode(loader, child, frameState) && ready;
+  }
+
+  return ready;
 }
 
-function MorphTarget() {
-  this.vertexAttributes = [];
-}
+ModelRuntime.prototype.update = function (frameState) {
+  var ready = true;
+  var nodes = this.nodes;
+  var nodesLength = nodes.length;
+  for (var i = 0; i < nodesLength; ++i) {
+    ready = updateNode(this, nodes[i], frameState) && ready;
+  }
 
-/**
- * @private
- */
-function Primitive() {
-  this.vertexAttributes = []; // Dictionary of semantic to vertex buffer?
-  this.morphTargets = [];
-  this.indices = undefined;
-  this.material = undefined;
-  this.mode = undefined;
+  var featureMetadata = this.featureMetadata;
+  if (defined(featureMetadata)) {
+    ready = updateFeatureMetadata(featureMetadata) && ready;
+  }
 
-  this.featureIdAttributes = [];
-  this.featureIdTextures = [];
-  this.featureTextures = [];
-}
+  return ready;
+};
 
-function Mesh() {
-  this.primitives = [];
-  this.morphWeights = [];
-}
-
-function Instances() {
-  this.attributes = [];
-  this.featureIdAttributes = [];
-}
-
-function Node() {
-  this.children = [];
-  this.mesh = undefined;
-  this.instances = undefined;
-}
-
-function Texture() {
-  this.texture = undefined;
-  this.cacheResource = undefined;
-}
-
-function Material() {
-  this.baseColorTexture = undefined;
-  this.metallicRoughnessTexture = undefined;
-  this.baseColorFactor = undefined;
-  this.metallicFactor = undefined;
-  this.roughnessFactor = undefined;
-
-  this.diffuseTexture = undefined;
-  this.specularGlossinessTexture = undefined;
-  this.diffuseFactor = undefined;
-  this.specularFactor = undefined;
-  this.glossinessFactor = undefined;
-
-  this.emissiveTexture = undefined;
-  this.normalTexture = undefined;
-  this.occlusionTexture = undefined;
-  this.emissiveFactor = undefined;
-  this.alphaMode = undefined;
-  this.alphaCutoff = undefined;
-  this.doubleSided = undefined;
-}
+ModelRuntime.prototype.unload = function () {};
 
 ModelRuntime.VertexAttribute = VertexAttribute;
 ModelRuntime.Indices = Indices;
