@@ -129,8 +129,20 @@ describe("Scene/Metadata3DTilesExtension", function () {
   });
 
   it("constructor throws without extension", function () {
+    var schema = new MetadataSchema(schemaJson);
+
     expect(function () {
-      return new Metadata3DTilesExtension();
+      return new Metadata3DTilesExtension({
+        schema: schema,
+      });
+    }).toThrowDeveloperError();
+  });
+
+  it("constructor throws without schema", function () {
+    expect(function () {
+      return new Metadata3DTilesExtension({
+        extension: {},
+      });
     }).toThrowDeveloperError();
   });
 });
