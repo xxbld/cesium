@@ -1817,7 +1817,7 @@ Viewer.prototype._onTick = function (clock) {
     var trackedEntity = this._trackedEntity;
     var trackedState = this._dataSourceDisplay.getBoundingSphere(
       trackedEntity,
-      false,
+      true,
       boundingSphereScratch
     );
     if (trackedState === BoundingSphereState.DONE) {
